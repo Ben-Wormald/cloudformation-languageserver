@@ -16,7 +16,7 @@ import { CancellationError, Delayer } from '../../utils/Delayer';
 import { extractErrorMessage } from '../../utils/Errors';
 import { byteSize } from '../../utils/String';
 import { DiagnosticCoordinator } from '../DiagnosticCoordinator';
-import { WorkerNotInitializedError } from './CfnLintErrors';
+import { WorkerNotInitializedError, MountError } from './CfnLintErrors';
 import { PyodideWorkerManager } from './PyodideWorkerManager';
 
 export enum LintTrigger {
@@ -66,6 +66,9 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
         if (error instanceof WorkerNotInitializedError) {
             return 'WorkerNotInitialized';
         }
+        if (error instanceof MountError) {
+            return 'MountError';
+        }
         const errorMessage = extractErrorMessage(error);
         if (errorMessage.includes('timeout')) {
             return 'Timeout';
@@ -74,14 +77,16 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
             return 'WorkerCrash';
         }
         if (errorMessage.includes('Python') || errorMessage.includes('Pyodide')) {
-            // Track Python-specific errors
-            this.telemetry.count('python.error', 1, { attributes: { errorType: 'PythonError' } });
             return 'PythonError';
         }
         if (errorMessage.includes('parse') || errorMessage.includes('Parse')) {
             return 'ParseError';
         }
         return 'Unknown';
+    }
+
+    private isInfrastructureError(errorType: string): boolean {
+        return errorType === 'WorkerNotInitialized' || errorType === 'WorkerCrash' || errorType === 'MountError';
     }
 
     // Request queue for handling requests during initialization
@@ -179,7 +184,7 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
             }
         } catch (error) {
             this.status = STATUS.Uninitialized;
-            this.telemetry.count('init.fault', 1);
+            this.telemetry.error('init.fault', error, undefined, { captureErrorAttributes: true });
             this.telemetry.histogram('init.duration', performance.now() - startTime, { unit: 'ms' });
             throw new Error(`Failed to initialize Pyodide worker: ${extractErrorMessage(error)}`);
         }
@@ -196,6 +201,10 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
         if (this.status === STATUS.Uninitialized) {
             throw new Error('CfnLintService not initialized. Call initialize() first.');
         }
+
+        const folderName =
+            folder.name.length > 0 ? folder.name : (folder.uri.replace('file://', '').split('/').pop() ?? '');
+        folder.name = folderName; // Update folder name to ensure consistent mounting and path resolution
 
         const fsDir = URI.parse(folder.uri).fsPath;
         const mountDir = '/'.concat(folder.name);
@@ -214,8 +223,12 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
             this.telemetry.countUpDown('mount.active', 1);
         } catch (error) {
             this.logError('mounting folder', error);
-            this.telemetry.count('mount.fault', 1);
-            throw error; // Re-throw to notify caller
+            const errorType = this.classifyLintError(error);
+            this.telemetry.error('mount.fault', error, undefined, {
+                captureErrorAttributes: true,
+                attributes: { errorType },
+            });
+            throw new MountError(`Failed to mount folder ${mountDir}`, error instanceof Error ? error : undefined);
         }
     }
 
@@ -338,12 +351,18 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
             this.status = STATUS.Uninitialized;
             this.logError(`linting ${fileType} by string`, error);
             this.publishErrorDiagnostics(uri, error);
-            this.telemetry.count('lint.error', 1, {
-                attributes: {
-                    fileType,
-                    errorType: this.classifyLintError(error),
-                },
-            });
+
+            const errorType = this.classifyLintError(error);
+            // Only count as lint.error if it's a cfn-lint failure, not infrastructure issues
+            if (!this.isInfrastructureError(errorType)) {
+                this.telemetry.error('lint.error', error, undefined, {
+                    captureErrorAttributes: true,
+                    attributes: {
+                        fileType,
+                        errorType,
+                    },
+                });
+            }
         } finally {
             this.telemetry.histogram(
                 'lint.standaloneFile.duration',
@@ -392,8 +411,21 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
         const startTime = performance.now();
         try {
             // Ensure folder is mounted before linting
-            await this.mountFolder(folder);
+            try {
+                await this.mountFolder(folder);
+            } catch (error) {
+                // If mounting fails and this isn't a GitSync file, fall back to linting by content
+                if (error instanceof MountError && fileType !== CloudFormationFileType.GitSyncDeployment) {
+                    this.log.warn(`Mount failed, falling back to lint by content for ${uri}`);
+                    return await this.lintStandaloneFile(content, uri, fileType);
+                }
+                throw error;
+            }
 
+            const folderName =
+                folder.name.length > 0 ? folder.name : (folder.uri.replace('file://', '').split('/').pop() ?? '');
+
+            folder.name = folderName; // Update folder name to ensure consistent mounting and path resolution
             const relativePath = uri.replace(folder.uri, '/'.concat(folder.name));
 
             // Use worker to lint file
@@ -429,12 +461,18 @@ export class CfnLintService implements SettingsConfigurable, Closeable {
             this.status = STATUS.Uninitialized;
             this.logError(`linting ${fileType} by file`, error);
             this.publishErrorDiagnostics(uri, error);
-            this.telemetry.count('lint.error', 1, {
-                attributes: {
-                    fileType,
-                    errorType: this.classifyLintError(error),
-                },
-            });
+
+            const errorType = this.classifyLintError(error);
+            // Only count as lint.error if it's a cfn-lint failure, not infrastructure issues
+            if (!this.isInfrastructureError(errorType)) {
+                this.telemetry.error('lint.error', error, undefined, {
+                    captureErrorAttributes: true,
+                    attributes: {
+                        fileType,
+                        errorType,
+                    },
+                });
+            }
         } finally {
             this.telemetry.histogram(
                 'lint.workspaceFile.duration',

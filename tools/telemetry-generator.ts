@@ -4,73 +4,9 @@ import { readdirSync } from 'fs';
 import { join, extname, resolve } from 'path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { Storage } from '../src/utils/Storage';
-import { ExtendedInitializeParams } from '../src/server/InitParams';
-import { LoggerFactory } from '../src/telemetry/LoggerFactory';
-import { TelemetryService } from '../src/telemetry/TelemetryService';
-
-const id = v4();
-const rootDir = join(process.cwd(), 'node_modules', '.cache', 'telemetry-generator', id);
-const initParams: ExtendedInitializeParams = {
-    capabilities: {},
-    processId: 1,
-    rootUri: 'SomeUri',
-    initializationOptions: {
-        aws: {
-            telemetryEnabled: true,
-            clientInfo: {
-                extension: {
-                    name: 'Test Telemetry Generator',
-                    version: '0.0.0',
-                },
-                clientId: id,
-            },
-            logLevel: 'warn',
-            storageDir: rootDir,
-        },
-    },
-};
-
-Storage.initialize(rootDir);
-LoggerFactory.initialize('warn');
-TelemetryService.initialize(
-    initParams?.initializationOptions?.aws?.clientInfo?.extension,
-    initParams?.initializationOptions?.aws,
-);
-
-import { generatePositions, TestPosition, discoverTemplateFiles } from './utils';
-import { DocumentManager } from '../src/document/DocumentManager';
-import { TextDocuments } from 'vscode-languageserver/node';
-import { TextDocument } from 'vscode-languageserver-textdocument';
-import {
-    createMockLspDiagnostics,
-    createMockLspWorkspace,
-    createMockLspDocuments,
-    createMockLspCommunication,
-    createMockAuthHandlers,
-} from '../tst/utils/MockServerComponents';
-import { MultiDataStoreFactoryProvider } from '../src/datastore/DataStore';
-import { SchemaStore } from '../src/schema/SchemaStore';
-import { completionHandler } from '../src/handlers/CompletionHandler';
-import { hoverHandler } from '../src/handlers/HoverHandler';
-import { definitionHandler } from '../src/handlers/DefinitionHandler';
-import { documentSymbolHandler } from '../src/handlers/DocumentSymbolHandler';
-import { codeLensHandler } from '../src/handlers/CodeLensHandler';
-import { LspComponents } from '../src/protocol/LspComponents';
-import { CfnInfraCore } from '../src/server/CfnInfraCore';
-import { CfnExternal } from '../src/server/CfnExternal';
-import { CfnLspProviders } from '../src/server/CfnLspProviders';
-import { ServerComponents } from '../src/server/ServerComponents';
-import { CancellationToken } from 'vscode-jsonrpc/lib/common/cancellation';
-import { stubInterface } from 'ts-sinon';
-import { LspHandlers } from '../src/protocol/LspHandlers';
-import { LspStackHandlers } from '../src/protocol/LspStackHandlers';
-import { LspResourceHandlers } from '../src/protocol/LspResourceHandlers';
-import { LspRelatedResourcesHandlers } from '../src/protocol/LspRelatedResourcesHandlers';
-import { LspS3Handlers } from '../src/protocol/LspS3Handlers';
-import { RelationshipSchemaService } from '../src/services/RelationshipSchemaService';
-import { LspCfnEnvironmentHandlers } from '../src/protocol/LspCfnEnvironmentHandlers';
-import { FeatureFlagProvider, getFromGitHub } from '../src/featureFlag/FeatureFlagProvider';
+import { AwsMetadata } from '../src/server/InitParams';
+import { staticInitialize } from '../src/app/initialize';
+import { randomBytes } from 'crypto';
 
 const argv = yargs(hideBin(process.argv))
     .option('templates', {
@@ -92,6 +28,21 @@ const argv = yargs(hideBin(process.argv))
             return values.map((path) => resolve(path));
         },
     })
+    .option('client-id', {
+        alias: 'c',
+        type: 'string',
+        description: 'Client ID for telemetry (defaults to random UUID)',
+    })
+    .option('extension-name', {
+        type: 'string',
+        default: 'Telemetry Generator',
+        description: 'Extension name for telemetry metadata',
+    })
+    .option('extension-version', {
+        type: 'string',
+        default: '0.0.0 (canary)',
+        description: 'Extension version for telemetry metadata',
+    })
     .option('interval', {
         alias: 'i',
         type: 'number',
@@ -104,11 +55,74 @@ const argv = yargs(hideBin(process.argv))
             return value;
         },
     })
+    .option('debug', {
+        alias: 'd',
+        type: 'boolean',
+        default: false,
+        description: 'Run in debug mode',
+    })
     .help()
     .parseSync();
 
+const id = argv.clientId ?? v4();
 const TEMPLATE_PATHS = argv.templates;
 const INTERVAL_MS = argv.interval;
+const isDebug = argv.debug;
+
+const awsMetadata: AwsMetadata = {
+    telemetryEnabled: true,
+    clientInfo: {
+        extension: {
+            name: argv.extensionName,
+            version: argv.extensionVersion,
+        },
+        clientId: id,
+    },
+    logLevel: isDebug ? 'info' : 'warn',
+    storageDir: join(process.cwd(), 'node_modules', '.cache', 'telemetry-generator', id),
+    encryption: {
+        key: randomBytes(32).toString('base64'),
+        mode: 'JWT',
+    },
+};
+staticInitialize(awsMetadata?.clientInfo?.extension, awsMetadata);
+
+import { generatePositions, TestPosition, discoverTemplateFiles } from './utils';
+import { DocumentManager } from '../src/document/DocumentManager';
+import { TextDocuments } from 'vscode-languageserver/node';
+import { TextDocument } from 'vscode-languageserver-textdocument';
+import {
+    createMockLspDiagnostics,
+    createMockLspWorkspace,
+    createMockLspDocuments,
+    createMockLspCommunication,
+    createMockAuthHandlers,
+} from '../tst/utils/MockServerComponents';
+import { MultiDataStoreFactoryProvider } from '../src/datastore/DataStore';
+import { SchemaStore } from '../src/schema/SchemaStore';
+import { completionHandler } from '../src/handlers/CompletionHandler';
+import { hoverHandler } from '../src/handlers/HoverHandler';
+import { definitionHandler } from '../src/handlers/DefinitionHandler';
+import { documentSymbolHandler } from '../src/handlers/DocumentSymbolHandler';
+import { codeActionHandler } from '../src/handlers/CodeActionHandler';
+import { codeLensHandler } from '../src/handlers/CodeLensHandler';
+import { LspComponents } from '../src/protocol/LspComponents';
+import { CfnInfraCore } from '../src/server/CfnInfraCore';
+import { CfnExternal } from '../src/server/CfnExternal';
+import { CfnLspProviders } from '../src/server/CfnLspProviders';
+import { ServerComponents } from '../src/server/ServerComponents';
+import { CancellationToken } from 'vscode-jsonrpc/lib/common/cancellation';
+import { stubInterface } from 'ts-sinon';
+import { LspHandlers } from '../src/protocol/LspHandlers';
+import { LspStackHandlers } from '../src/protocol/LspStackHandlers';
+import { LspResourceHandlers } from '../src/protocol/LspResourceHandlers';
+import { LspRelatedResourcesHandlers } from '../src/protocol/LspRelatedResourcesHandlers';
+import { LspS3Handlers } from '../src/protocol/LspS3Handlers';
+import { RelationshipSchemaService } from '../src/services/RelationshipSchemaService';
+import { LspCfnEnvironmentHandlers } from '../src/protocol/LspCfnEnvironmentHandlers';
+import { FeatureFlagProvider, getFromGitHub } from '../src/featureFlag/FeatureFlagProvider';
+import { AwsEnv } from '../src/utils/Environment';
+import { TelemetryService } from '../src/telemetry/TelemetryService';
 
 const textDocuments = new TextDocuments(TextDocument);
 
@@ -122,12 +136,6 @@ function processTemplate(uri: string, content: string, pos: TestPosition, compon
         components.contextManager.getContextAndRelatedEntities(params);
         components.fileContextManager.getFileContext(params.textDocument.uri);
 
-        components.hoverRouter.getHoverDoc(params);
-        components.completionRouter.getCompletions({ ...params, context: { triggerKind: 2 } }).catch(console.error);
-        components.definitionProvider.getDefinitions(params);
-        components.documentSymbolRouter.getDocumentSymbols(params);
-        components.codeLensProvider.getCodeLenses(params.textDocument.uri);
-
         hoverHandler(components)(params, CancellationToken.None, undefined as any, undefined as any);
 
         completionHandler(components)(
@@ -137,22 +145,14 @@ function processTemplate(uri: string, content: string, pos: TestPosition, compon
             undefined as any,
         );
 
-        definitionHandler(components)(
-            { textDocument: { uri }, position },
-            CancellationToken.None,
-            undefined as any,
-            undefined as any,
-        );
+        definitionHandler(components)(params, CancellationToken.None, undefined as any, undefined as any);
 
-        documentSymbolHandler(components)(
-            { textDocument: { uri } },
-            CancellationToken.None,
-            undefined as any,
-            undefined as any,
-        );
+        documentSymbolHandler(components)(params, CancellationToken.None, undefined as any, undefined as any);
 
-        codeLensHandler(components)(
-            { textDocument: { uri } },
+        codeLensHandler(components)(params, CancellationToken.None, undefined as any, undefined as any);
+
+        codeActionHandler(components)(
+            { textDocument: { uri }, range: { start: position, end: position }, context: { diagnostics: [] } },
             CancellationToken.None,
             undefined as any,
             undefined as any,
@@ -177,7 +177,7 @@ function main() {
         process.exit(1);
     }
 
-    console.log(`Using id ${id}`);
+    console.log(`Using client id ${id}`);
     const lsp = new LspComponents(
         createMockLspDiagnostics(),
         createMockLspWorkspace(),
@@ -193,17 +193,28 @@ function main() {
     );
 
     const dataStoreFactory = new MultiDataStoreFactoryProvider();
-    const core = new CfnInfraCore(lsp, initParams, {
-        dataStoreFactory,
-        documentManager: new DocumentManager(textDocuments),
-    });
+    const core = new CfnInfraCore(
+        lsp,
+        {
+            capabilities: {},
+            processId: 1,
+            rootUri: 'SomeUri',
+            initializationOptions: {
+                aws: awsMetadata,
+            },
+        },
+        {
+            dataStoreFactory,
+            documentManager: new DocumentManager(textDocuments),
+        },
+    );
 
     const schemaStore = new SchemaStore(dataStoreFactory);
     const external = new CfnExternal(lsp, core, {
         schemaStore,
         featureFlags: new FeatureFlagProvider(
             getFromGitHub,
-            join(__dirname, '..', 'assets', 'featureFlag', 'alpha.json'),
+            join(__dirname, '..', 'assets', 'featureFlag', `${AwsEnv}.json`),
         ),
     });
 
@@ -235,7 +246,7 @@ function main() {
         processTemplate(template.path, template.content, pos, components);
 
         iteration++;
-        if (iteration % 50 === 0) {
+        if (iteration % 100 === 0) {
             console.log(`📊 Completed ${iteration} iterations`);
         }
     }, INTERVAL_MS);

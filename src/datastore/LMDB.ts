@@ -97,15 +97,8 @@ export class LMDBStoreFactory implements DataStoreFactory {
 
         if (msg.includes('MDB_BAD_RSLOT') || msg.includes("doesn't match env pid")) {
             this.recoverFromFork();
-        } else if (
-            msg.includes('MDB_CURSOR_FULL') ||
-            msg.includes('MDB_CORRUPTED') ||
-            msg.includes('MDB_PAGE_NOTFOUND') ||
-            msg.includes('MDB_BAD_TXN') ||
-            msg.includes('Commit failed') ||
-            msg.includes('closed database')
-        ) {
-            this.recoverFromCorruption();
+        } else {
+            this.recoverFromError();
         }
     }
 
@@ -129,11 +122,24 @@ export class LMDBStoreFactory implements DataStoreFactory {
         this.recreateStores();
     }
 
-    private recoverFromCorruption(): void {
-        this.telemetry.count('corrupted', 1);
-        this.log.warn('Corruption detected, reopening LMDB');
-        this.reopenEnv();
-        this.recreateStores();
+    private recoverFromError(): void {
+        this.telemetry.count('error.recover', 1);
+        this.log.warn('Error detected, attempting to reopen LMDB');
+
+        try {
+            this.reopenEnv();
+            this.recreateStores();
+            this.log.info('Successfully recovered by reopening LMDB');
+        } catch {
+            this.log.warn('Reopen failed, deleting database');
+            try {
+                rmSync(join(this.lmdbDir, Version), { recursive: true, force: true });
+            } catch (deleteError) {
+                this.log.error(deleteError, 'Failed to delete LMDB');
+            }
+            this.reopenEnv();
+            this.recreateStores();
+        }
     }
 
     private reopenEnv(): void {
@@ -146,15 +152,20 @@ export class LMDBStoreFactory implements DataStoreFactory {
     private recreateStores(): void {
         for (const name of this.storeNames) {
             const database = this.env.openDB<unknown, string>({ name, encoding: Encoding });
-            this.stores.set(
-                name,
-                new LMDBStore(
+            const existing = this.stores.get(name);
+            if (existing) {
+                existing.updateStore(database);
+            } else {
+                this.stores.set(
                     name,
-                    database,
-                    (e) => this.handleError(e),
-                    () => this.ensureValidEnv(),
-                ),
-            );
+                    new LMDBStore(
+                        name,
+                        database,
+                        (e) => this.handleError(e),
+                        () => this.ensureValidEnv(),
+                    ),
+                );
+            }
         }
     }
 

@@ -237,14 +237,20 @@ export class GuardService implements SettingsConfigurable, Closeable {
             if (errorMessage.includes('Parser Error') || errorMessage.includes('parsing data file')) {
                 // Publish empty diagnostics to clear any previous Guard diagnostics
                 this.publishDiagnostics(uri, []);
-                this.telemetry.count('parser.error', 1, { attributes: { errorType: 'ParseError' } });
-                this.telemetry.count('validate.error', 1, { attributes: { fileType, errorType: 'ParseError' } });
+                this.telemetry.error('parser.error', error, undefined, {
+                    captureErrorAttributes: true,
+                    attributes: { errorType: 'ParseError' },
+                });
+                // Parse errors are developer issues, not service availability issues
                 return;
             }
 
             // Check for WASM errors
             if (errorMessage.includes('WASM') || errorMessage.includes('wasm')) {
-                this.telemetry.count('wasm.error', 1, { attributes: { errorType: 'WasmError' } });
+                this.telemetry.error('wasm.error', error, undefined, {
+                    captureErrorAttributes: true,
+                    attributes: { errorType: 'WasmError' },
+                });
             }
 
             // Check for memory errors
@@ -253,12 +259,15 @@ export class GuardService implements SettingsConfigurable, Closeable {
                 errorMessage.includes('Memory') ||
                 errorMessage.includes('out of memory')
             ) {
-                this.telemetry.count('memory.threshold.exceeded', 1);
+                this.telemetry.error('memory.threshold.exceeded', error, undefined, { captureErrorAttributes: true });
             }
 
             // For other errors (WASM issues, timeouts, etc.), log as error and show diagnostic
             this.publishErrorDiagnostics(uri, errorMessage);
-            this.telemetry.count('validate.error', 1, { attributes: { fileType, errorType: 'Unknown' } });
+            this.telemetry.error('validate.error', error, undefined, {
+                captureErrorAttributes: true,
+                attributes: { fileType, errorType: 'Unknown' },
+            });
         } finally {
             this.telemetry.histogram('validate.duration', (performance.now() - startTime) / byteSize(content), {
                 unit: 'ms/byte',
@@ -315,7 +324,6 @@ export class GuardService implements SettingsConfigurable, Closeable {
             // Combine rule names with commas
             const combinedRuleName = [...group.ruleNames].toSorted().join(', ');
 
-            // Try to get precise location from CloudFormation path if available
             const range = this.getViolationRange(uri, group.violations[0]);
 
             const diagnostic: Diagnostic = {
@@ -327,12 +335,10 @@ export class GuardService implements SettingsConfigurable, Closeable {
             };
 
             const firstViolation = group.violations[0];
-            if (firstViolation.location.path || firstViolation.context) {
-                diagnostic.data = {
-                    path: firstViolation.location.path,
-                    context: firstViolation.context,
-                };
-            }
+            const diagnosticId =
+                firstViolation.context ?? `guard-${firstViolation.location.line}-${firstViolation.location.column}`;
+
+            diagnostic.data = diagnosticId;
 
             diagnostics.push(diagnostic);
         }
@@ -341,23 +347,30 @@ export class GuardService implements SettingsConfigurable, Closeable {
     }
 
     /**
-     * Get precise range for a violation using CloudFormation path resolution
+     * Get precise range for a violation using syntax tree
      */
     private getViolationRange(uri: string, violation: GuardViolation): Range {
-        // If we have a CloudFormation path, try to resolve it to precise location
-        if (violation.location.path && uri) {
-            // Try to get just the key part of the key/value pair using syntax tree directly
-            const keyRange = this.diagnosticCoordinator.getKeyRangeFromPath(uri, violation.location.path);
-            if (keyRange) {
-                return keyRange;
-            }
+        // Use syntax tree to get node range
+        const syntaxTree = this.syntaxTreeManager.getSyntaxTree(uri);
+        if (syntaxTree) {
+            const startLine = Math.max(0, violation.location.line - 1);
+            const startCharacter = Math.max(0, violation.location.column - 1);
+
+            const node = syntaxTree.getNodeAtPosition({
+                line: startLine,
+                character: startCharacter,
+            });
+
+            return {
+                start: { line: node.startPosition.row, character: node.startPosition.column },
+                end: { line: node.endPosition.row, character: node.endPosition.column },
+            };
         }
 
-        // Fallback to Guard's provided line/column
+        // Fallback: return zero-width range
         const startLine = Math.max(0, violation.location.line - 1);
         const startCharacter = Math.max(0, violation.location.column - 1);
 
-        // Create single-point range as fallback
         return {
             start: { line: startLine, character: startCharacter },
             end: { line: startLine, character: startCharacter },
@@ -642,7 +655,10 @@ export class GuardService implements SettingsConfigurable, Closeable {
                 this.telemetry.count('rules.custom.loaded', customRules.length);
                 this.log.info(`Loaded ${customRules.length} rules from custom file: ${this.settings.rulesFile}`);
             } catch (error) {
-                this.telemetry.count('rules.load.error', 1, { attributes: { errorType: 'CustomFile' } });
+                this.telemetry.error('rules.load.error', error, undefined, {
+                    captureErrorAttributes: true,
+                    attributes: { errorType: 'CustomFile' },
+                });
                 this.log.error(
                     `Failed to load rules from file '${this.settings.rulesFile}': ${extractErrorMessage(error)}`,
                 );
@@ -678,7 +694,8 @@ export class GuardService implements SettingsConfigurable, Closeable {
                         enabledRules.push(this.convertRuleDataToGuardRule(ruleData));
                     }
                 } catch (error) {
-                    this.telemetry.count('rules.load.error', 1, {
+                    this.telemetry.error('rules.load.error', error, undefined, {
+                        captureErrorAttributes: true,
                         attributes: { pack: packName, errorType: 'PackLoad' },
                     });
                     this.log.error(`Failed to get rules for pack '${packName}': ${extractErrorMessage(error)}`);

@@ -24,7 +24,7 @@ export class TelemetryService implements Closeable {
 
         if (this.enabled) {
             const id = metadata?.clientInfo?.clientId ?? v4();
-            const { metricsReader, sdk } = otelSdk(id, client);
+            const { metricsReader, sdk } = otelSdk(id, client, metadata?.clientInfo?.extension);
 
             this.metricsReader = metricsReader;
             this.sdk = sdk;
@@ -44,10 +44,11 @@ export class TelemetryService implements Closeable {
         }
 
         if (this.enabled && this.sdk) {
-            telemetry = new ScopedTelemetry(scope, metrics.getMeter(scope), trace.getTracer(scope));
+            // @ts-expect-error - ScopedTelemetry constructor is private; TelemetryService is the sole owner
+            telemetry = new ScopedTelemetry(scope, metrics.getMeter(scope), trace.getTracer(scope)) as ScopedTelemetry;
         } else {
-            // NoOp init when telemetry is disabled
-            telemetry = new ScopedTelemetry(scope);
+            // @ts-expect-error - ScopedTelemetry constructor is private; TelemetryService is the sole owner
+            telemetry = new ScopedTelemetry(scope) as ScopedTelemetry;
         }
 
         this.scopedTelemetry.set(scope, telemetry);

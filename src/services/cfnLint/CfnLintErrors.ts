@@ -4,3 +4,13 @@ export class WorkerNotInitializedError extends Error {
         this.name = 'WorkerNotInitializedError';
     }
 }
+
+export class MountError extends Error {
+    public override readonly cause?: Error;
+
+    constructor(message: string, cause?: Error) {
+        super(message);
+        this.name = 'MountError';
+        this.cause = cause;
+    }
+}

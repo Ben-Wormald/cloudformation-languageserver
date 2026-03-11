@@ -5,6 +5,8 @@ import { CloudFormationFileType } from '../../document/Document';
 import { CfnLintInitializationSettings, CfnLintSettings } from '../../settings/Settings';
 import { LoggerFactory } from '../../telemetry/LoggerFactory';
 import { ScopedTelemetry } from '../../telemetry/ScopedTelemetry';
+import { Telemetry } from '../../telemetry/TelemetryDecorator';
+import { extractErrorMessage } from '../../utils/Errors';
 import { retryWithExponentialBackoff } from '../../utils/Retry';
 import { WorkerNotInitializedError } from './CfnLintErrors';
 
@@ -31,15 +33,14 @@ export class PyodideWorkerManager {
     private readonly tasks = new Map<string, WorkerTask>();
     private initialized = false;
     private initializationPromise: Promise<void> | undefined = undefined;
-    private readonly telemetry: ScopedTelemetry;
+
+    @Telemetry() private readonly telemetry!: ScopedTelemetry;
 
     constructor(
         private readonly retryConfig: CfnLintInitializationSettings,
         private cfnLintSettings: CfnLintSettings,
         private readonly log = LoggerFactory.getLogger(PyodideWorkerManager),
-    ) {
-        this.telemetry = new ScopedTelemetry('PyodideWorkerManager');
-    }
+    ) {}
 
     public async initialize(): Promise<void> {
         if (this.initialized) {
@@ -139,14 +140,18 @@ export class PyodideWorkerManager {
                     },
                     reject: (reason: Error) => {
                         this.worker = undefined;
-                        this.telemetry.count('pyodide.init.fault', 1);
+                        this.telemetry.error('pyodide.init.fault', reason, undefined, { captureErrorAttributes: true });
 
                         // Try to determine if it was a PyPI or wheels failure
                         const errorMessage = reason.message || '';
                         if (errorMessage.includes('PyPI')) {
-                            this.telemetry.count('init.pypi.fault', 1);
+                            this.telemetry.error('init.pypi.fault', reason, undefined, {
+                                captureErrorAttributes: true,
+                            });
                         } else if (errorMessage.includes('wheels') || errorMessage.includes('wheel')) {
-                            this.telemetry.count('init.wheels.fault', 1);
+                            this.telemetry.error('init.wheels.fault', reason, undefined, {
+                                captureErrorAttributes: true,
+                            });
                         }
 
                         reject(reason);
@@ -161,7 +166,7 @@ export class PyodideWorkerManager {
                 });
             } catch (error) {
                 this.worker = undefined;
-                reject(error instanceof Error ? error : new Error(String(error)));
+                reject(error instanceof Error ? error : new Error(extractErrorMessage(error)));
             }
         });
     }

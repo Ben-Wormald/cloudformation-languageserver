@@ -19,19 +19,24 @@ export function getIndentationString(editorSettings: EditorSettings, documentTyp
 /**
  * Apply indentation to a multi-line snippet template
  * @param template The snippet template with placeholder indentation markers
+ * @param baseIndentation The starting indentation to apply to every line
  * @param editorSettings Editor settings for indentation (can be document-specific)
  * @param documentType Document type (YAML/JSON)
  * @returns Formatted snippet with proper indentation
  */
 export function applySnippetIndentation(
     template: string,
+    baseIndentation: string,
     editorSettings: EditorSettings,
     documentType: DocumentType,
 ): string {
-    const baseIndent = getIndentationString(editorSettings, documentType);
+    const indent = getIndentationString(editorSettings, documentType);
+
+    template = `${baseIndentation}${template}`;
 
     return template
-        .replaceAll(/\n\s*{INDENT1}/g, `\n${baseIndent}`)
-        .replaceAll(/\n\s*{INDENT2}/g, `\n${baseIndent.repeat(2)}`)
-        .replaceAll(/\n\s*{INDENT3}/g, `\n${baseIndent.repeat(3)}`);
+        .replaceAll(/\n\s*{INDENT1}/g, `\n${indent}`)
+        .replaceAll(/\n\s*{INDENT2}/g, `\n${indent.repeat(2)}`)
+        .replaceAll(/\n\s*{INDENT3}/g, `\n${indent.repeat(3)}`)
+        .replaceAll('\n', `\n${baseIndentation}`);
 }

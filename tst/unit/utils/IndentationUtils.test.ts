@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DocumentType } from '../../../src/document/Document';
 import { EditorSettings } from '../../../src/settings/Settings';
-import { getIndentationString } from '../../../src/utils/IndentationUtils';
+import { applySnippetIndentation, getIndentationString } from '../../../src/utils/IndentationUtils';
 
 describe('IndentationUtils', () => {
     describe('getIndentationString', () => {
@@ -59,6 +59,44 @@ describe('IndentationUtils', () => {
                 const result = getIndentationString(editorSettings, DocumentType.JSON);
 
                 expect(result).toBe('\t'); // Single tab
+            });
+        });
+    });
+
+    describe('applySnippetIndentation', () => {
+        describe('YAML behaviour', () => {
+            test('applies indentation to a snippet', () => {
+                const editorSettings: EditorSettings = {
+                    tabSize: 2,
+                    insertSpaces: true,
+                    detectIndentation: true,
+                };
+
+                const snippet = 'Parameters:\n{INDENT1}\${1:ParameterName}:\n{INDENT2}Type: $2';
+
+                const expectedSnippet = '  Parameters:\n    \${1:ParameterName}:\n      Type: $2';
+
+                const result = applySnippetIndentation(snippet, '  ', editorSettings, DocumentType.YAML);
+
+                expect(result).toEqual(expectedSnippet);
+            });
+        });
+
+        describe('JSON behaviour', () => {
+            test('applies indentation to a snippet', () => {
+                const editorSettings: EditorSettings = {
+                    tabSize: 2,
+                    insertSpaces: true,
+                    detectIndentation: true,
+                };
+
+                const snippet = '"Parameters": {\n{INDENT1}"\${1:ParameterName}": {\n{INDENT2}"Type": "$2"\n{INDENT1}}\n}';
+
+                const expectedSnippet = '  "Parameters": {\n    "\${1:ParameterName}": {\n      "Type": "$2"\n    }\n  }';
+
+                const result = applySnippetIndentation(snippet, '  ', editorSettings, DocumentType.JSON);
+
+                expect(result).toEqual(expectedSnippet);
             });
         });
     });

@@ -8,7 +8,6 @@ import { FeatureFlag } from '../featureFlag/FeatureFlagI';
 import { LoggerFactory } from '../telemetry/LoggerFactory';
 import { Measure } from '../telemetry/TelemetryDecorator';
 import { getFuzzySearchFunction } from '../utils/FuzzySearchUtil';
-import { applySnippetIndentation } from '../utils/IndentationUtils';
 import { CompletionFormatter, ExtendedCompletionItem } from './CompletionFormatter';
 import { CompletionProvider } from './CompletionProvider';
 import { createCompletionItem, handleSnippetJsonQuotes } from './CompletionUtils';
@@ -122,7 +121,7 @@ ${CompletionFormatter.getIndentPlaceholder(1)}\${1:ConditionName}: $2`,
         }).map((section) => {
             let type: string;
 
-            if (section === String(TopLevelSection.Description)) {
+            if (section === String(TopLevelSection.Description) || section === String(TopLevelSection.AWSTemplateFormatVersion)) {
               type = 'string';
             } else if (section === String(TopLevelSection.Transform)) {
               type = 'array';
@@ -161,14 +160,10 @@ ${CompletionFormatter.getIndentPlaceholder(1)}\${1:ConditionName}: $2`,
             throw new Error(`No snippet template defined for section: ${section}`);
         }
 
-        let snippet = context.documentType === DocumentType.JSON ? snippetTemplate.json : snippetTemplate.yaml;
-
-        const documentSpecificSettings = this.documentManager.getEditorSettingsForDocument(params.textDocument.uri);
-
-        snippet = applySnippetIndentation(snippet, documentSpecificSettings, context.documentType);
+        let insertText = context.documentType === DocumentType.JSON ? snippetTemplate.json : snippetTemplate.yaml;
 
         const completionItem: ExtendedCompletionItem = createCompletionItem(section, CompletionItemKind.File, {
-            insertText: snippet,
+            insertText,
             data: { type: 'object' },
         });
 

@@ -17,7 +17,7 @@ import { NodeType } from '../context/syntaxtree/utils/NodeType';
 import { DocumentType } from '../document/Document';
 import { EditorSettings } from '../settings/Settings';
 import { LoggerFactory } from '../telemetry/LoggerFactory';
-import { getIndentationString } from '../utils/IndentationUtils';
+import { applySnippetIndentation, getIndentationString } from '../utils/IndentationUtils';
 
 const WHITESPACE = new RegExp(/^\s*/);
 
@@ -84,8 +84,9 @@ export class CompletionFormatter {
         context: Context,
         lineContent?: string,
     ): CompletionItem {
-        // Skip formatting for items that already have snippet format
         if (item.insertTextFormat === InsertTextFormat.Snippet) {
+            const currentIndentation = lineContent?.match(WHITESPACE)?.[0] || ' '.repeat(context.startPosition.column);
+            item.insertText = applySnippetIndentation(item.insertText || '', currentIndentation, editorSettings, documentType);
             return item;
         }
 
